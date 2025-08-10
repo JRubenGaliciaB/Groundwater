@@ -1,0 +1,109 @@
+// Groundwater Monitoring Analysis using GLDAS dataset in Google Earth Engine
+// GLDAS - Global Land Data Assimilation System 
+
+// --- PUNTOS DE QUERÉTARO --- //
+var point1 = ee.Geometry.Point([-100.50120502140946, 20.48324283937462]);
+var point2 = ee.Geometry.Point([-100.08132247033605, 20.773368551394512]);
+
+var pointFeature1 = ee.Feature(point1);
+var pointFeature2 = ee.Feature(point2);
+var pointsCollection = ee.FeatureCollection([pointFeature1, pointFeature2]);
+
+// --- FRONTERA DE MÉXICO --- //
+var countries = ee.FeatureCollection('USDOS/LSIB_SIMPLE/2017');
+var mexico = countries.filter(ee.Filter.eq('country_na', 'Mexico'));
+
+// Centrar el mapa en México
+Map.centerObject(mexico, 5);
+
+// --- FECHAS --- //
+var startDate = ee.Date('2003-01-01');
+var endDate = ee.Date('2024-01-01');
+var timeDifference = endDate.difference(startDate, 'month').round();
+
+// --- CARGAR DATOS GLDAS --- //
+var groundwaterData = ee.ImageCollection("NASA/GLDAS/V022/CLSM/G025/DA1D")
+  .select('GWS_tavg')
+  .filterDate(startDate, endDate);
+
+// --- CREAR LISTA DE MESES --- //
+var dateList = ee.List.sequence(0, timeDifference.subtract(1)).map(function(delta) {
+  return startDate.advance(delta, 'month');
+});
+
+// --- COLECCIÓN PROMEDIOS MENSUALES --- //
+var monthlyGW = ee.ImageCollection(dateList.map(function(date) {
+  var start = ee.Date(date);
+  var end = start.advance(1, 'month');
+  var monthlyAverage = groundwaterData.filterDate(start, end).mean().rename('Groundwater');
+  return monthlyAverage
+    .set('system:time_start', start.millis())
+    .set('system:index', start.format('YYYY-MM'));
+}));
+
+// --- VISUALIZACIÓN: Paleta y escala --- //
+var visParams = {
+  min: -2,
+  max: 2,
+  palette: ['red', 'orange', 'yellow', 'green', 'blue']
+};
+
+// --- SLIDER INTERACTIVO --- //
+var availableDates = monthlyGW.aggregate_array('system:index');
+var slider = ui.Slider({
+  min: 0,
+  max: availableDates.length().getInfo() - 1,
+  step: 1,
+  style: {stretch: 'horizontal'},
+  onChange: updateMap
+});
+
+var label = ui.Label('Selecciona el mes');
+var panel = ui.Panel([label, slider], 'bottom');
+Map.add(panel);
+
+// --- FUNCIÓN PARA ACTUALIZAR MAPA CON SLIDER --- //
+function updateMap(index) {
+  Map.layers().reset();
+
+  var selectedDate = ee.String(availableDates.get(index));
+  var image = monthlyGW.filter(ee.Filter.eq('system:index', selectedDate)).first().clip(mexico);
+
+  Map.addLayer(image, visParams, 'GWS_tavg - ' + selectedDate.getInfo());
+  Map.addLayer(point1, {color: 'red'}, 'Punto 1');
+  Map.addLayer(point2, {color: 'blue'}, 'Punto 2');
+  Map.addLayer(mexico, {color: 'gray'}, 'México');
+}
+
+// --- Mostrar primer mes por defecto --- //
+updateMap(0);
+
+// --- GRÁFICAS (opcional, se mantienen) --- //
+var groundwaterChart = ui.Chart.image.series({
+  imageCollection: monthlyGW,
+  region: mexico,
+  reducer: ee.Reducer.mean(),
+  scale: 10000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'Almacenamiento Promedio de Agua Subterránea en México',
+  hAxis: {title: 'Tiempo'},
+  vAxis: {title: 'GWS_tavg'},
+  colors: ['green']
+});
+print(groundwaterChart);
+
+var pointChart = ui.Chart.image.seriesByRegion({
+  imageCollection: monthlyGW,
+  regions: pointsCollection,
+  reducer: ee.Reducer.first(),
+  band: 'Groundwater',
+  scale: 10000,
+  xProperty: 'system:time_start'
+}).setOptions({
+  title: 'GWS_tavg en Puntos de Querétaro',
+  hAxis: {title: 'Tiempo'},
+  vAxis: {title: 'GWS_tavg'},
+  colors: ['red', 'blue']
+});
+print(pointChart);
